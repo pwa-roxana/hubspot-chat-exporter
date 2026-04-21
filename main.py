@@ -407,11 +407,13 @@ function renderAgents(c){
 }
 
 function renderTable(c){
-  document.getElementById('conv-tbody').innerHTML=c.slice(0,25).map(x=>{
+  document.getElementById('conv-tbody').innerHTML=c.slice(0,50).map((x,i)=>{
     const last=x.messages.filter(m=>m.text).slice(-1)[0];
-    const badge=(x.status||'').toLowerCase().includes('closed')?
-      '<span class="badge badge-closed">Closed</span>':'<span class="badge badge-open">Open</span>';
-    return`<tr>
+    const isClosed=(x.status||'').toLowerCase().includes('closed');
+    const badge=isClosed?
+      `<span class="badge badge-closed" style="cursor:pointer" onclick="openModal(${i})">Closed</span>`:
+      `<span class="badge badge-open" style="cursor:pointer" onclick="openModal(${i})">Open</span>`;
+    return`<tr style="cursor:pointer" onclick="openModal(${i})">
       <td>${x.date.toLocaleDateString()}</td>
       <td title="${x.email}">${x.visitor||x.email||'Unknown'}</td>
       <td>${(x.assigned||'—').slice(0,20)}</td>
@@ -420,6 +422,36 @@ function renderTable(c){
     </tr>`;
   }).join('');
 }
+
+function openModal(idx){
+  const c=parsedConvos[idx];
+  if(!c)return;
+  const isClosed=(c.status||'').toLowerCase().includes('closed');
+  const statusBadge=isClosed?
+    '<span class="badge badge-closed">Closed</span>':
+    '<span class="badge badge-open">Open</span>';
+  const msgs=c.messages.filter(m=>m.text).map(m=>{
+    const isAgent=m.sender&&m.sender!=='MESSAGE'&&!m.sender.includes('@');
+    const align=isAgent?'right':'left';
+    const bg=isAgent?'#1F3864':'#f0f2f5';
+    const color=isAgent?'#fff':'#1a1a2e';
+    const name=isAgent?(m.sender||'Agent'):'Visitor';
+    const time=m.time?m.time.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'';
+    return`<div style="display:flex;flex-direction:column;align-items:${isAgent?'flex-end':'flex-start'};margin-bottom:12px">
+      <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">${name} ${time}</div>
+      <div style="max-width:75%;padding:10px 14px;border-radius:12px;background:${bg};color:${color};font-size:13px;line-height:1.5">${m.text}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('modal-visitor').textContent=c.visitor||c.email||'Unknown visitor';
+  document.getElementById('modal-email').textContent=c.email||'';
+  document.getElementById('modal-date').textContent=c.date.toLocaleDateString('en-US',{weekday:'short',year:'numeric',month:'short',day:'numeric'});
+  document.getElementById('modal-status').innerHTML=statusBadge;
+  document.getElementById('modal-agent').textContent=c.assigned||'—';
+  document.getElementById('modal-msgs').innerHTML=msgs||'<p style="color:#9ca3af;font-size:13px">No messages</p>';
+  document.getElementById('conv-modal').style.display='flex';
+}
+
+function closeModal(){document.getElementById('conv-modal').style.display='none';}
 
 async function runAI(){
   const btn=document.getElementById('ai-btn');
@@ -442,7 +474,27 @@ async function runAI(){
   }catch(e){content.innerHTML='<p style="font-size:13px;color:#991b1b">Analysis failed: '+e.message+'</p>';}
   finally{btn.disabled=false;btn.textContent='Re-analyze';}
 }
-</script></body></html>"""
+</script>
+
+<div id="conv-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#fff;border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column">
+    <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;align-items:flex-start;justify-content:space-between">
+      <div>
+        <div style="font-size:16px;font-weight:600;color:#1a1a2e" id="modal-visitor"></div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px" id="modal-email"></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px;font-size:12px;color:#6b7280">
+          <span id="modal-date"></span>
+          <span id="modal-status"></span>
+          <span>Assigned: <strong id="modal-agent"></strong></span>
+        </div>
+      </div>
+      <button onclick="closeModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;padding:0;line-height:1">&times;</button>
+    </div>
+    <div id="modal-msgs" style="flex:1;overflow-y:auto;padding:20px"></div>
+  </div>
+</div>
+
+</body></html>"""
 
 def cors(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -515,6 +567,22 @@ def fetch_messages(headers, thread_id):
         resp.raise_for_status();return resp.json().get('results',[])
     except: return []
 
+TEST_KEYWORDS = ['test','dont respond','do not respond','testing','test chat','please don\'t respond','do not interact','for roxana','dont interact']
+
+EXCLUDED_VISITORS = [
+    'test test', 'רז קלינגהופר', 'roxana tunc', 'academics@pwa.edu',
+    'maricuzalonso@yahoo.com', 'maricuz', 'raz klinghoffer', 'raz klingh'
+]
+
+def is_test_conversation(conv, messages, visitor_name='', visitor_email=''):
+    all_text = ' '.join((m.get('text') or m.get('body') or '').lower() for m in messages)
+    if any(k in all_text for k in TEST_KEYWORDS):
+        return True
+    combined = (visitor_name + ' ' + visitor_email).lower()
+    if any(e in combined for e in EXCLUDED_VISITORS):
+        return True
+    return False
+
 def build_rows(conversations, headers):
     result=[]
     for conv in conversations:
@@ -524,6 +592,7 @@ def build_rows(conversations, headers):
         assigned_raw=conv.get('assignedTo') or conv.get('assignedActorId') or ''
         assigned=resolve_agent(headers,assigned_raw) if assigned_raw else ''
         messages=fetch_messages(headers,tid)
+        if is_test_conversation(conv, messages, contact_name, contact_email): continue
         for msg in messages:
             sender_type=msg.get('senderType') or msg.get('type') or ''
             if sender_type=='WELCOME_MESSAGE': continue
