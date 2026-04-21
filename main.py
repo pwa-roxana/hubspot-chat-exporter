@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file, render_template_string
+from flask import Flask, request, jsonify, send_file, render_template_string, session, redirect
 import requests
 from datetime import datetime
 from openpyxl import Workbook
@@ -7,8 +7,49 @@ import io
 import os
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "pwa-chat-exporter-secret")
 
-HTML = """
+HUBSPOT_TOKEN = os.environ.get("HUBSPOT_TOKEN", "")
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "pwa2024")
+
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+  <title>PWA Chat Exporter</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f6f9; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .card { background: white; border-radius: 12px; padding: 2rem; width: 100%; max-width: 380px; box-shadow: 0 2px 16px rgba(0,0,0,0.08); }
+    .logo { font-size: 12px; font-weight: 700; color: #f97316; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
+    h1 { font-size: 20px; font-weight: 600; color: #1a1a2e; margin-bottom: 0.25rem; }
+    p.sub { font-size: 13px; color: #6b7280; margin-bottom: 1.5rem; }
+    label { display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 5px; }
+    input { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; margin-bottom: 1rem; outline: none; }
+    input:focus { border-color: #1F3864; }
+    button { width: 100%; padding: 11px; background: #1F3864; color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }
+    button:hover { background: #162a4a; }
+    .error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Pacific West Academy</div>
+  <h1>Live Chat Exporter</h1>
+  <p class="sub">Enter the team password to continue</p>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <form method="POST" action="/login">
+    <label>Password</label>
+    <input type="password" name="password" placeholder="Enter password" autofocus />
+    <button type="submit">Sign In</button>
+  </form>
+</div>
+</body>
+</html>
+"""
+
+MAIN_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -18,16 +59,16 @@ HTML = """
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f6f9; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
     .card { background: white; border-radius: 12px; padding: 2rem; width: 100%; max-width: 520px; box-shadow: 0 2px 16px rgba(0,0,0,0.08); }
-    .logo { font-size: 13px; font-weight: 600; color: #f97316; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.5rem; }
+    .logo { font-size: 12px; font-weight: 700; color: #f97316; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
     h1 { font-size: 22px; font-weight: 600; color: #1a1a2e; margin-bottom: 0.25rem; }
     p.sub { font-size: 14px; color: #6b7280; margin-bottom: 1.75rem; }
     label { display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 5px; }
     input, select { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; color: #111827; margin-bottom: 1rem; outline: none; transition: border 0.2s; }
-    input:focus, select:focus { border-color: #1F3864; }
+    input:focus { border-color: #1F3864; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    button { width: 100%; padding: 12px; background: #1F3864; color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 0.25rem; }
-    button:hover { background: #162a4a; }
-    button:disabled { background: #9ca3af; cursor: not-allowed; }
+    button.export-btn { width: 100%; padding: 12px; background: #1F3864; color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 0.25rem; }
+    button.export-btn:hover { background: #162a4a; }
+    button.export-btn:disabled { background: #9ca3af; cursor: not-allowed; }
     .status { margin-top: 1.25rem; padding: 12px 14px; border-radius: 8px; font-size: 14px; display: none; }
     .status.info { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
     .status.success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
@@ -35,16 +76,17 @@ HTML = """
     .progress { height: 4px; background: #e5e7eb; border-radius: 4px; margin-top: 10px; overflow: hidden; display: none; }
     .progress-bar { height: 100%; background: #1F3864; width: 0%; transition: width 0.4s; border-radius: 4px; }
     a.dl { display: block; text-align: center; margin-top: 1rem; padding: 11px; background: #166534; color: white; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; }
+    .logout { text-align: right; margin-bottom: 1rem; }
+    .logout a { font-size: 12px; color: #9ca3af; text-decoration: none; }
+    .logout a:hover { color: #374151; }
   </style>
 </head>
 <body>
 <div class="card">
+  <div class="logout"><a href="/logout">Sign out</a></div>
   <div class="logo">Pacific West Academy</div>
   <h1>Live Chat Exporter</h1>
   <p class="sub">Export all HubSpot conversations to Excel</p>
-
-  <label>HubSpot Private App Token</label>
-  <input type="password" id="token" placeholder="pat-na2-xxxxxxxx..." />
 
   <div class="row">
     <div>
@@ -57,7 +99,7 @@ HTML = """
     </div>
   </div>
 
-  <button id="btn" onclick="runExport()">Export to Excel</button>
+  <button class="export-btn" id="btn" onclick="runExport()">Export to Excel</button>
 
   <div class="progress" id="progress"><div class="progress-bar" id="bar"></div></div>
   <div class="status" id="status"></div>
@@ -66,9 +108,6 @@ HTML = """
 
 <script>
 async function runExport() {
-  const token = document.getElementById('token').value.trim();
-  if (!token) { showStatus('Please enter your HubSpot token.', 'error'); return; }
-
   const btn = document.getElementById('btn');
   btn.disabled = true;
   btn.textContent = 'Exporting...';
@@ -79,7 +118,6 @@ async function runExport() {
 
   try {
     const body = {
-      token,
       from_date: document.getElementById('from_date').value || null,
       to_date: document.getElementById('to_date').value || null
     };
@@ -238,20 +276,41 @@ def fetch_messages(headers, thread_id):
 
 @app.route("/")
 def index():
-    return render_template_string(HTML)
+    if not session.get("authenticated"):
+        return redirect("/login")
+    return render_template_string(MAIN_HTML)
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        pw = request.form.get("password", "")
+        if pw == APP_PASSWORD:
+            session["authenticated"] = True
+            return redirect("/")
+        return render_template_string(LOGIN_HTML, error="Incorrect password. Please try again.")
+    return render_template_string(LOGIN_HTML, error=None)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
 
 
 @app.route("/export", methods=["POST"])
 def export():
+    if not session.get("authenticated"):
+        return jsonify({"error": "Not authenticated"}), 401
+
+    if not HUBSPOT_TOKEN:
+        return jsonify({"error": "HUBSPOT_TOKEN environment variable not set on server"}), 500
+
     body = request.get_json()
-    token = body.get("token", "").strip()
     from_date = body.get("from_date")
     to_date = body.get("to_date")
 
-    if not token:
-        return jsonify({"error": "Token is required"}), 400
-
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {HUBSPOT_TOKEN}", "Content-Type": "application/json"}
     from_ts = parse_ts(from_date + "T00:00:00Z") if from_date else None
     to_ts = parse_ts(to_date + "T23:59:59Z") if to_date else None
 
@@ -268,7 +327,7 @@ def export():
     header_font = Font(color="FFFFFF", bold=True, size=11)
     col_headers = ["Thread ID", "Date", "Status", "Visitor Name", "Visitor Email",
                    "Visitor Phone", "Assigned To", "Sender", "Message Time", "Message"]
-    col_widths = [15, 20, 12, 22, 32, 18, 22, 16, 20, 80]
+    col_widths = [15, 20, 12, 22, 32, 18, 22, 22, 20, 80]
 
     for col, (h, w) in enumerate(zip(col_headers, col_widths), 1):
         cell = ws.cell(row=1, column=col, value=h)
