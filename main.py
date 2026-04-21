@@ -12,6 +12,12 @@ APP_PASSWORD = os.environ.get("APP_PASSWORD", "pwa2024")
 BASE = "https://api.hubapi.com"
 agent_cache = {}
 
+KNOWN_AGENTS = {
+    'A-10327929': 'Maricruz Alonso',
+    'A-79088480': 'Colin Moser',
+    'A-12160092': 'John Gill',
+}
+
 LOGIN_HTML = """<!DOCTYPE html><html><head><title>PWA Live Chat</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -491,6 +497,7 @@ def fetch_contact(headers, contact_id):
 
 def resolve_agent(headers, actor_id):
     if not actor_id: return ''
+    if actor_id in KNOWN_AGENTS: return KNOWN_AGENTS[actor_id]
     if actor_id in agent_cache: return agent_cache[actor_id]
     user_id=actor_id.replace('A-','') if actor_id.startswith('A-') else actor_id
     name=actor_id
