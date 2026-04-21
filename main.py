@@ -578,7 +578,7 @@ def is_test_conversation(conv, messages, visitor_name='', visitor_email=''):
     all_text = ' '.join((m.get('text') or m.get('body') or '').lower() for m in messages)
     if any(k in all_text for k in TEST_KEYWORDS):
         return True
-    combined = (visitor_name + ' ' + visitor_email).lower()
+    combined = ((visitor_name or '') + ' ' + (visitor_email or '')).lower()
     if any(e in combined for e in EXCLUDED_VISITORS):
         return True
     return False
